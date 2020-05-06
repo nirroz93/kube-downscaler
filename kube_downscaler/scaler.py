@@ -17,6 +17,7 @@ from kube_downscaler.helper import matches_time_spec
 from kube_downscaler.resources.stack import Stack
 
 ORIGINAL_REPLICAS_ANNOTATION = "downscaler/original-replicas"
+INCLUDE_N_TIMES_ANNOTATION = "downscaler/include-n-times"
 FORCE_UPTIME_ANNOTATION = "downscaler/force-uptime"
 UPSCALE_PERIOD_ANNOTATION = "downscaler/upscale-period"
 DOWNSCALE_PERIOD_ANNOTATION = "downscaler/downscale-period"
@@ -116,7 +117,10 @@ def ignore_resource(resource: NamespacedAPIObject, now: datetime.datetime) -> bo
             return False
         if now < until_ts:
             return True
-
+    perform_scaling_n_times = get_annotation_value_as_int(resource, INCLUDE_N_TIMES_ANNOTATION)
+    if isinstance(perform_scaling_n_times, int):
+        if perform_scaling_n_times <= 0:
+            return True
     return False
 
 
@@ -144,6 +148,12 @@ def get_replicas(
     return replicas
 
 
+def decrease_scaling_n_times_annotation(resource):
+    perform_scaling_n_times = get_annotation_value_as_int(resource, INCLUDE_N_TIMES_ANNOTATION)
+    if perform_scaling_n_times:
+        resource.annotations[INCLUDE_N_TIMES_ANNOTATION] = str(perform_scaling_n_times - 1)
+
+
 def scale_up(
     resource: NamespacedAPIObject,
     replicas: int,
@@ -151,6 +161,7 @@ def scale_up(
     uptime,
     downtime,
 ):
+    decrease_scaling_n_times_annotation(resource)
     if resource.kind == "CronJob":
         resource.obj["spec"]["suspend"] = False
         logger.info(
@@ -172,7 +183,7 @@ def scale_up(
 def scale_down(
     resource: NamespacedAPIObject, replicas: int, target_replicas: int, uptime, downtime
 ):
-
+    decrease_scaling_n_times_annotation(resource)
     if resource.kind == "CronJob":
         resource.obj["spec"]["suspend"] = True
         logger.info(
@@ -284,6 +295,7 @@ def autoscale_resource(
             ):
 
                 scale_up(resource, replicas, original_replicas, uptime, downtime)
+
                 update_needed = True
             elif (
                 not ignore
